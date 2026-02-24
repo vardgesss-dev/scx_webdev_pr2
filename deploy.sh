@@ -45,7 +45,7 @@ docker rm "$APP" 2>/dev/null || true
 docker run -d --name "$APP" -p 8080:80 "$APP:$VERSION" || exit 1
 
 sleep 5
-if curl -s -o /dev/null -w "%{http_code}" http://localhost/ | grep -q 200; then
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ | grep -q 200; then
   echo "Deploy successful"
   exit 0
 else
