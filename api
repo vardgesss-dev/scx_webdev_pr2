@@ -1,0 +1,137 @@
+from fastapi import FastAPI, HTTPException, Query, Path, status
+from typing import Optional, List
+from datetime import datetime
+from pydantic import BaseModel, Field, field_validator
+from enum import Enum
+import secrets
+
+app = FastAPI()
+
+class StatusEnum(str, Enum):
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
+    cancelled = "cancelled"
+
+class TaskIn(BaseModel):
+    title: str = Field(..., min_length=3, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    status: StatusEnum = StatusEnum.pending
+
+    @field_validator('title')
+    def title_letters_only(cls, v):
+        if not v.replace(' ', '').isalpha():
+            raise ValueError('В названии должны быть только буквы и пробелы')
+        return v.strip()
+
+    @field_validator('description')
+    def description_min_length(cls, v):
+        if v is not None and len(v.strip()) < 5:
+            raise ValueError('Описание слишком короткое (мин. 5 символов)')
+        return v.strip() if v else v
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=3, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    status: Optional[StatusEnum] = None
+
+    @field_validator('title')
+    def title_letters_only(cls, v):
+        if v is not None:
+            if not v.replace(' ', '').isalpha():
+                raise ValueError('В названии должны быть только буквы и пробелы')
+            return v.strip()
+        return v
+
+    @field_validator('description')
+    def description_min_length(cls, v):
+        if v is not None and len(v.strip()) < 5:
+            raise ValueError('Описание слишком короткое (мин. 5 символов)')
+        return v.strip() if v else v
+
+class TaskOut(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = None
+    status: StatusEnum
+    created_at: datetime
+    updated_at: datetime
+
+tasks = []
+
+def find_task(task_id: str):
+    for i, t in enumerate(tasks):
+        if t['id'] == task_id:
+            return i, t
+    return None, None
+
+@app.get("/")
+def home():
+    return {"message": "Task API"}
+
+@app.get("/tasks", response_model=List[TaskOut])
+def list_tasks(status: Optional[StatusEnum] = None, limit: int = Query(100, ge=1)):
+    filtered = [t for t in tasks if status is None or t['status'] == status]
+    filtered.sort(key=lambda x: x['created_at'], reverse=True)
+    return filtered[:limit]
+
+@app.post("/tasks", response_model=TaskOut, status_code=201)
+def create_task(task_data: TaskIn):
+    now = datetime.utcnow()
+    new_id = secrets.token_hex(8)
+    new_task = {
+        "id": new_id,
+        "title": task_data.title,
+        "description": task_data.description,
+        "status": task_data.status,
+        "created_at": now,
+        "updated_at": now,
+    }
+    tasks.append(new_task)
+    return new_task
+
+@app.get("/tasks/{task_id}", response_model=TaskOut)
+def get_task(task_id: str = Path(...)):
+    idx, task = find_task(task_id)
+    if idx is None:
+        raise HTTPException(404, "Задача не найдена")
+    return task
+
+@app.put("/tasks/{task_id}", response_model=TaskOut)
+def update_task(task_id: str, update: TaskUpdate):
+    idx, task = find_task(task_id)
+    if idx is None:
+        raise HTTPException(404, "Задача не найдена")
+    update_data = update.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(400, "Нет данных для обновления")
+    task.update(update_data)
+    task['updated_at'] = datetime.utcnow()
+    tasks[idx] = task
+    return task
+
+@app.delete("/tasks/{task_id}", status_code=204)
+def delete_task(task_id: str):
+    idx, _ = find_task(task_id)
+    if idx is None:
+        raise HTTPException(404, "Задача не найдена")
+    tasks.pop(idx)
+
+sample_tasks = [
+    {"title": "Помыть посуду", "description": "Горячая вода и средство", "status": "pending"},
+    {"title": "Выучить английский", "description": "10 новых слов", "status": "in_progress"},
+    {"title": "Пробежка", "description": "3 круга вокруг дома", "status": "completed"},
+]
+for s in sample_tasks:
+    tasks.append({
+        "id": secrets.token_hex(8),
+        "title": s["title"],
+        "description": s["description"],
+        "status": s["status"],
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+    })
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
